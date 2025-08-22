@@ -127,6 +127,7 @@ bool Ota::CheckVersion() {
         if (cJSON_IsString(code)) {
             activation_code_ = code->valuestring;
             has_activation_code_ = true;
+            activation_message_ = code->valuestring;
         }
         cJSON* challenge = cJSON_GetObjectItem(activation, "challenge");
         if (cJSON_IsString(challenge)) {
