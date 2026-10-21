@@ -58,8 +58,10 @@ dependencies:
     # esp32p4 libraries with the Zb extension, which those chips lack, so
     # esp_ipa_pipeline_create dies with an illegal instruction. esp_video
     # 2.3.x depends on esp_ipa 2.2.*, whose libraries are Zb-free.
+    # The target test comes first: the board symbol only exists on esp32p4,
+    # and && stops before looking it up on other targets.
     matches:
-    - if: $CONFIG{BOARD_TYPE_RETERMINAL_D1001} == True
+    - if: target == esp32p4 && $CONFIG{BOARD_TYPE_RETERMINAL_D1001} == True
       version: ~2.3.0
     - if: target in [esp32p4, esp32s3, esp32s31]
 
