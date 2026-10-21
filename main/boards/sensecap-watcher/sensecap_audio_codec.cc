@@ -172,8 +172,6 @@ void SensecapAudioCodec::EnableInput(bool enable) {
         };
         ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
         ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(input_dev_, 27.0));
-        // TX generates BCLK and WS for duplex I2S0, keep it enabled for RX
-        i2s_channel_enable(tx_handle_);
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
     }
@@ -199,19 +197,11 @@ void SensecapAudioCodec::EnableOutput(bool enable) {
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 1);
         }
-        if (pa_callback_) {
-            pa_callback_(true);
-        }
     } else {
-        if (pa_callback_) {
-            pa_callback_(false);
-        }
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 0);
         }
-        // TX is master clock generator for full duplex I2S0; re-enable so RX mic keeps clock
-        i2s_channel_enable(tx_handle_);
     }
     AudioCodec::EnableOutput(enable);
 }
