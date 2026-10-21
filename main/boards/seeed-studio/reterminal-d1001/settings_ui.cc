@@ -1339,18 +1339,46 @@ void SettingsUi::ShowFacePage() {
     page_ = SettingsPage::Face;
     int mode = 0;
     std::string endpoint;
+    bool model_available = true;
     if (face_get_) {
-        face_get_(mode, endpoint);
+        face_get_(mode, endpoint, model_available);
     }
-    // Only seed the selection from the saved config on first entry; a tile
-    // tap rebuilds the page and must keep the user pick.
-    if (pending_face_mode_ < 0) {
+    // If local model is missing in flash, force mode to Off (0).
+    if (!model_available) {
+        pending_face_mode_ = 0;
+    } else if (pending_face_mode_ < 0) {
         pending_face_mode_ = mode;
     }
 
     lv_obj_t* body = BuildPage("人脸识别", Action::Close, false);
     lv_obj_t* content = MakeScrollArea(body);
     MakeSectionLabel(content, "视觉模式");
+
+    if (!model_available) {
+        lv_obj_t* warn_card = lv_obj_create(content);
+        lv_obj_remove_style_all(warn_card);
+        lv_obj_set_width(warn_card, LV_PCT(100));
+        lv_obj_set_height(warn_card, LV_SIZE_CONTENT);
+        lv_obj_set_style_radius(warn_card, kCardRadius, 0);
+        lv_obj_set_style_bg_color(warn_card, CardColor(), 0);
+        lv_obj_set_style_bg_opa(warn_card, LV_OPA_90, 0);
+        lv_obj_set_style_border_width(warn_card, 1, 0);
+        lv_obj_set_style_border_color(warn_card, lv_color_hex(0xE6A23C), 0);
+        lv_obj_set_style_pad_all(warn_card, 12, 0);
+        lv_obj_set_flex_flow(warn_card, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(warn_card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(warn_card, 10, 0);
+
+        lv_obj_t* warn_icon = MakeIconLabel(warn_card, MATERIAL_SYMBOLS_WARNING, false);
+        lv_obj_set_style_text_color(warn_icon, lv_color_hex(0xE6A23C), 0);
+
+        lv_obj_t* warn_text = lv_label_create(warn_card);
+        lv_label_set_text(warn_text, "未检测到人脸模型固件，感知与哨兵模式已自动停用");
+        lv_obj_set_style_text_color(warn_text, ThemeTextColor(), 0);
+        lv_obj_set_style_text_opa(warn_text, LV_OPA_80, 0);
+        lv_obj_set_flex_grow(warn_text, 1);
+    }
 
     static const char* kModeNames[4] = {"不感知", "人形感知", "智能问候", "哨兵模式"};
     static const char* kModeHints[4] = {"关闭视觉，不唤醒", "有人即唤醒，不认人脸",
@@ -1372,17 +1400,20 @@ void SettingsUi::ShowFacePage() {
     lv_obj_set_scrollbar_mode(grid, LV_SCROLLBAR_MODE_OFF);
 
     for (int i = 0; i < 4; i++) {
+        bool disabled = (!model_available && i > 0);
         bool selected = (i == pending_face_mode_);
         lv_obj_t* tile = lv_button_create(grid);
         lv_obj_set_size(tile, LV_PCT(48), 116);
         lv_obj_set_style_radius(tile, kCardRadius, 0);
         lv_obj_set_style_shadow_width(tile, 0, 0);
         lv_obj_set_style_bg_color(tile, selected ? AccentWashStrongColor() : CardColor(), 0);
-        lv_obj_set_style_bg_opa(tile, LV_OPA_90, 0);
+        lv_obj_set_style_bg_opa(tile, disabled ? LV_OPA_40 : LV_OPA_90, 0);
         lv_obj_set_style_border_width(tile, selected ? 2 : 1, 0);
         lv_obj_set_style_border_color(tile, selected ? AccentColor() : SurfaceBorderColor(), 0);
-        lv_obj_set_style_border_opa(tile, selected ? LV_OPA_COVER : LV_OPA_60, 0);
-        ApplyPressFeedback(tile, selected ? AccentWashStrongColor() : CardColor());
+        lv_obj_set_style_border_opa(tile, disabled ? LV_OPA_30 : (selected ? LV_OPA_COVER : LV_OPA_60), 0);
+        if (!disabled) {
+            ApplyPressFeedback(tile, selected ? AccentWashStrongColor() : CardColor());
+        }
         lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(tile, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
         lv_obj_set_style_pad_all(tile, 18, 0);
@@ -1399,10 +1430,16 @@ void SettingsUi::ShowFacePage() {
 
         lv_obj_t* mode_icon = MakeIconLabel(hrow, kModeIcons[i], false);
         lv_obj_set_style_text_color(mode_icon, selected ? AccentInkColor() : ThemeTextColor(), 0);
+        if (disabled) {
+            lv_obj_set_style_text_opa(mode_icon, LV_OPA_40, 0);
+        }
 
         lv_obj_t* name = lv_label_create(hrow);
         lv_label_set_text(name, kModeNames[i]);
         lv_obj_set_style_text_color(name, selected ? AccentInkColor() : ThemeTextColor(), 0);
+        if (disabled) {
+            lv_obj_set_style_text_opa(name, LV_OPA_40, 0);
+        }
         lv_obj_set_flex_grow(name, 1);
 
         if (selected) {
@@ -1411,11 +1448,21 @@ void SettingsUi::ShowFacePage() {
         }
 
         lv_obj_t* hint = lv_label_create(tile);
-        lv_label_set_text(hint, kModeHints[i]);
-        lv_obj_set_style_text_color(hint, selected ? AccentInkColor() : ThemeTextColor(), 0);
-        lv_obj_set_style_text_opa(hint, selected ? LV_OPA_90 : LV_OPA_70, 0);
+        if (disabled) {
+            lv_label_set_text(hint, "模型缺失不可用");
+            lv_obj_set_style_text_color(hint, ThemeTextColor(), 0);
+            lv_obj_set_style_text_opa(hint, LV_OPA_40, 0);
+        } else {
+            lv_label_set_text(hint, kModeHints[i]);
+            lv_obj_set_style_text_color(hint, selected ? AccentInkColor() : ThemeTextColor(), 0);
+            lv_obj_set_style_text_opa(hint, selected ? LV_OPA_90 : LV_OPA_70, 0);
+        }
 
-        Bind(tile, Action::FacePick, i);
+        if (!disabled) {
+            Bind(tile, Action::FacePick, i);
+        } else {
+            lv_obj_remove_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+        }
     }
 
     MakeSectionLabel(content, "识别参数");

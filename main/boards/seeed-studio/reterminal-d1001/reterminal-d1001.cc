@@ -648,10 +648,12 @@ private:
                 [this](bool large) { return display_->GetIconFont(large); });
             settings_ui_->SetPowerSaveChangedCallback([this]() { ApplyPowerSaveConfig(); });
             settings_ui_->SetFaceCallbacks(
-                [this](int& mode, std::string& endpoint) {
+                [this](int& mode, std::string& endpoint, bool& model_available) {
                     mode = face_service_ != nullptr ? face_service_->GetMode() : 0;
                     endpoint =
                         face_service_ != nullptr ? face_service_->GetEndpoint() : "";
+                    model_available =
+                        face_service_ != nullptr && face_service_->IsModelAvailable();
                 },
                 [this](int mode, const std::string& endpoint) {
                     if (face_service_ != nullptr) {
@@ -1032,6 +1034,7 @@ public:
             if (camera_ != nullptr) {
                 face_service_.reset(new FaceService(camera_));
                 face_service_->Start();
+                display_->ApplyFaceIconState(face_service_->GetMode());
                 display_->SetFaceToggleCallback([this]() {
                     return face_service_ != nullptr ? face_service_->ToggleMode() : -1;
                 });

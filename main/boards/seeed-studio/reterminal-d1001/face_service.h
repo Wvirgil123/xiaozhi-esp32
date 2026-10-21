@@ -55,6 +55,7 @@ public:
     // persists and returns the new mode.
     int ToggleMode();
     int GetMode() const { return mode_.load(); }
+    bool IsModelAvailable() const { return model_available_; }
     std::string GetEndpoint();
     void SetModeAndEndpoint(int mode, const std::string& endpoint);
     // Re-reads every parameter from Settings("face") (after on-screen edits).
@@ -70,10 +71,13 @@ private:
     bool AnyQualifiedHit(const std::vector<FaceHit>& hits, std::string* names);
     // On-device esp-dl face detection on a raw camera frame.
     bool DetectFaceLocal();
+    bool CheckModelAvailable();
 
     D1001Camera* camera_;
     TaskHandle_t task_ = nullptr;
     std::mutex mutex_;  // endpoint_ + last_result_
+
+    bool model_available_ = false;
 
     // Settings namespace "face"
     std::atomic<int> mode_{0};  // 0 off, 1 detect-wake (local), 2 recognize-wake

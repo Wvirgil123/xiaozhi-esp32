@@ -69,9 +69,9 @@ public:
         power_save_changed_ = std::move(callback);
     }
 
-    // Face recognition page hooks: get returns {mode, endpoint}; apply saves
+    // Face recognition page hooks: get returns {mode, endpoint, model_available}; apply saves
     // them. Wired by the board to the FaceService.
-    using FaceGetCallback = std::function<void(int&, std::string&)>;
+    using FaceGetCallback = std::function<void(int&, std::string&, bool&)>;
     using FaceApplyCallback = std::function<void(int, const std::string&)>;
     void SetFaceCallbacks(FaceGetCallback get, FaceApplyCallback apply) {
         face_get_ = std::move(get);

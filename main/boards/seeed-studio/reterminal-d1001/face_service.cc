@@ -10,6 +10,7 @@
 
 #include <cJSON.h>
 #include <esp_log.h>
+#include <esp_partition.h>
 #include <esp_timer.h>
 #include <mbedtls/base64.h>
 
@@ -37,9 +38,46 @@ std::string TruncateUtf8(const std::string& s, size_t max_bytes) {
 
 FaceService::FaceService(D1001Camera* camera) : camera_(camera) {}
 
+bool FaceService::CheckModelAvailable() {
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "human_face_det");
+    if (part == nullptr) {
+        ESP_LOGW(TAG, "human_face_det partition not found in partition table");
+        return false;
+    }
+    if (part->size < 4096) {
+        ESP_LOGW(TAG, "human_face_det partition size %u bytes is invalid", (unsigned)part->size);
+        return false;
+    }
+    char magic[5] = {0};
+    esp_err_t err = esp_partition_read(part, 0, magic, 4);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to read human_face_det partition header: %s", esp_err_to_name(err));
+        return false;
+    }
+    if (strcmp(magic, "EDL1") != 0 && strcmp(magic, "PDL1") != 0 &&
+        strcmp(magic, "EDL2") != 0 && strcmp(magic, "PDL2") != 0) {
+        ESP_LOGW(TAG,
+                 "human_face_det partition contains no valid esp-dl model (magic: '%c%c%c%c')",
+                 (magic[0] >= 32 && magic[0] < 127) ? magic[0] : '?',
+                 (magic[1] >= 32 && magic[1] < 127) ? magic[1] : '?',
+                 (magic[2] >= 32 && magic[2] < 127) ? magic[2] : '?',
+                 (magic[3] >= 32 && magic[3] < 127) ? magic[3] : '?');
+        return false;
+    }
+    return true;
+}
+
 void FaceService::LoadConfig() {
     Settings settings("face", false);
-    mode_ = settings.GetInt("mode", 0);
+    int saved_mode = settings.GetInt("mode", 0);
+    if (!model_available_ && saved_mode > 0) {
+        ESP_LOGW(TAG, "face model missing in flash, falling back saved mode %d -> %d (Off)",
+                 saved_mode, kModeOff);
+        mode_ = kModeOff;
+    } else {
+        mode_ = saved_mode;
+    }
     interval_s_ = settings.GetInt("interval_s", 5);
     threshold_ = settings.GetInt("threshold", 60);
     duration_s_ = settings.GetInt("duration_s", 2);
@@ -53,6 +91,9 @@ void FaceService::LoadConfig() {
 }
 
 void FaceService::Start() {
+    model_available_ = CheckModelAvailable();
+    ESP_LOGI(TAG, "face detection model status: %s",
+             model_available_ ? "available" : "NOT found (fallback to safe mode)");
     LoadConfig();
     RegisterMcpTools();
     xTaskCreate(
@@ -61,8 +102,9 @@ void FaceService::Start() {
             vTaskDelete(nullptr);
         },
         "face_watch", 8192, this, 2, &task_);
-    ESP_LOGI(TAG, "started (mode=%d, endpoint %s)", mode_.load(),
-             endpoint_.empty() ? "unset" : "set");
+    ESP_LOGI(TAG, "started (mode=%d, endpoint %s, model %s)", mode_.load(),
+             endpoint_.empty() ? "unset" : "set",
+             model_available_ ? "ok" : "missing");
 }
 
 bool FaceService::RecognizeOnce(std::vector<FaceHit>& hits, std::string* error) {
@@ -197,11 +239,16 @@ bool FaceService::AnyQualifiedHit(const std::vector<FaceHit>& hits, std::string*
 }
 
 bool FaceService::DetectFaceLocal() {
-    if (camera_ == nullptr) {
+    if (!model_available_ || camera_ == nullptr) {
         return false;
     }
     if (detector_ == nullptr) {
         detector_ = new HumanFaceDetect();
+        if (detector_ == nullptr) {
+            ESP_LOGE(TAG, "failed to instantiate HumanFaceDetect");
+            model_available_ = false;
+            return false;
+        }
     }
     // On ESP32-P4 the MSR stage reports scores around 0.06-0.09 for a large
     // frontal face (roughly 10x below the model's documented calibration),
@@ -425,6 +472,10 @@ std::string FaceService::GetEndpoint() {
 void FaceService::SetModeAndEndpoint(int mode, const std::string& endpoint) {
     Settings settings("face", true);
     if (mode >= 0 && mode <= 3) {
+        if (!model_available_ && mode > 0) {
+            ESP_LOGW(TAG, "cannot set mode %d: face detection model missing in flash, falling back to Off", mode);
+            mode = kModeOff;
+        }
         settings.SetInt("mode", mode);
         mode_ = mode;
     }
@@ -437,6 +488,13 @@ void FaceService::SetModeAndEndpoint(int mode, const std::string& endpoint) {
 }
 
 int FaceService::ToggleMode() {
+    if (!model_available_) {
+        ESP_LOGW(TAG, "cannot toggle mode: face detection model missing in flash");
+        Settings settings("face", true);
+        settings.SetInt("mode", kModeOff);
+        mode_ = kModeOff;
+        return kModeOff;
+    }
     int next = (mode_.load() + 1) % 4;
     Settings settings("face", true);
     settings.SetInt("mode", next);
@@ -448,6 +506,7 @@ int FaceService::ToggleMode() {
 std::string FaceService::StatusJson() {
     std::lock_guard<std::mutex> lock(mutex_);
     return "{\"mode\":" + std::to_string(mode_.load()) +
+           ",\"model_available\":" + (model_available_ ? "true" : "false") +
            ",\"endpoint\":\"" + endpoint_ + "\"" +
            ",\"interval_s\":" + std::to_string(interval_s_.load()) +
            ",\"threshold\":" + std::to_string(threshold_.load()) +
@@ -472,6 +531,11 @@ bool FaceService::ApplyConfigJson(const std::string& body, std::string* error) {
         cJSON* item = cJSON_GetObjectItem(root, key);
         if (cJSON_IsNumber(item)) {
             int value = std::max(lo, std::min(hi, item->valueint));
+            if (strcmp(key, "mode") == 0 && value > 0 && !model_available_) {
+                ESP_LOGW(TAG, "ApplyConfig: mode %d rejected (face model missing in flash)", value);
+                value = kModeOff;
+                if (error) *error = "face model not installed; mode fallback to 0";
+            }
             settings.SetInt(key, value);
             target = value;
         }
@@ -545,6 +609,10 @@ void FaceService::RegisterMcpTools() {
             auto apply = [&](const char* key, std::atomic<int>& target) {
                 int value = properties[key].value<int>();
                 if (value != -1) {
+                    if (strcmp(key, "mode") == 0 && value > 0 && !model_available_) {
+                        ESP_LOGW(TAG, "param_set: mode %d requested but face model missing in flash", value);
+                        value = kModeOff;
+                    }
                     settings.SetInt(key, value);
                     target = value;
                 }
