@@ -727,7 +727,13 @@ SscmaCamera::SscmaCamera(esp_io_expander_handle_t io_exp_handle) {
                             ret = sscma_client_invoke(this_->sscma_client_handle_, -1, false, false);
                         }
                         if (ret != ESP_OK) {
-                            ESP_LOGE(TAG, "Failed to start face inference: %d", ret);
+                            ESP_LOGE(TAG, "Failed to start face inference: %d; falling back to object detection", ret);
+                            this_->SendFaceModeCommand(false);
+                            this_->face_recognition_en_ = false;
+                            is_face_mode = false;
+                            this_->camera_mode_ = SscmaCamera::MODE_OBJECT_DETECT;
+                            this_->inference_en.store(1);
+                            face_rec.SetEnabled(false);
                         } else {
                             ESP_LOGI(TAG, "Face inference started");
                             // Face mode is actually running now — record the
@@ -741,6 +747,8 @@ SscmaCamera::SscmaCamera(esp_io_expander_handle_t io_exp_handle) {
                         this_->face_recognition_en_ = false;
                         is_face_mode = false;
                         this_->camera_mode_ = SscmaCamera::MODE_OBJECT_DETECT;
+                        this_->inference_en.store(1);
+                        face_rec.SetEnabled(false);
                     }
                 }
             } else if (is_face_mode) {
@@ -836,24 +844,28 @@ SscmaCamera::~SscmaCamera() {
 bool SscmaCamera::ProbeFaceModelAvailable() {
     himax_face_warm_.store(false);
 
-    sscma_client_reply_t reply = {0};
-    char cmd[32];
-    snprintf(cmd, sizeof(cmd), "AT+FACE=0\r\n");
-
-    esp_err_t ret = ESP_FAIL;
-    {
-        std::lock_guard<std::mutex> lock(sscma_mutex_);
-        ret = sscma_client_request(sscma_client_handle_, cmd, &reply, true, pdMS_TO_TICKS(800));
-    }
     bool ok = false;
-    if (ret == ESP_OK && reply.payload != nullptr) {
-        cJSON* code = cJSON_GetObjectItem(reply.payload, "code");
-        if (code != nullptr && cJSON_IsNumber(code) && code->valueint == 0) {
-            ok = true;
+    for (int retry = 0; retry < 3; ++retry) {
+        sscma_client_reply_t reply = {0};
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "AT+FACE=0\r\n");
+
+        esp_err_t ret = ESP_FAIL;
+        {
+            std::lock_guard<std::mutex> lock(sscma_mutex_);
+            ret = sscma_client_request(sscma_client_handle_, cmd, &reply, true, pdMS_TO_TICKS(500));
         }
-    }
-    if (reply.payload != nullptr) {
-        sscma_client_reply_clear(&reply);
+        if (ret == ESP_OK && reply.payload != nullptr) {
+            cJSON* code = cJSON_GetObjectItem(reply.payload, "code");
+            if (code != nullptr && cJSON_IsNumber(code) && code->valueint == 0) {
+                ok = true;
+            }
+            sscma_client_reply_clear(&reply);
+        }
+        if (ok) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
     ESP_LOGI(TAG, "Himax WE2 face model probe: %s",
              ok ? "AVAILABLE" : "NOT SUPPORTED (fallback to object detection)");
@@ -876,12 +888,17 @@ bool SscmaCamera::SendFaceModeCommand(bool enable) {
         std::lock_guard<std::mutex> lock(sscma_mutex_);
         ret = sscma_client_request(sscma_client_handle_, cmd, &reply, true, pdMS_TO_TICKS(2000));
     }
-    if (reply.payload != NULL) {
+    bool success = false;
+    if (ret == ESP_OK && reply.payload != nullptr) {
+        cJSON* code = cJSON_GetObjectItem(reply.payload, "code");
+        if (code != nullptr && cJSON_IsNumber(code) && code->valueint == 0) {
+            success = true;
+        }
         sscma_client_reply_clear(&reply);
     }
 
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set face mode: %d", ret);
+    if (!success) {
+        ESP_LOGE(TAG, "Failed or rejected to set face mode %d (ret=%d)", enable ? 1 : 0, ret);
         return false;
     }
 
@@ -995,11 +1012,16 @@ bool SscmaCamera::BenchSingleShotFaceEmbedding(float* out_embedding,
                 esp_err_t ret = sscma_client_request(sscma_client_handle_, cmd,
                                                      &reply, true,
                                                      pdMS_TO_TICKS(2000));
-                if (reply.payload != NULL) {
+                bool at_face_ok = false;
+                if (ret == ESP_OK && reply.payload != NULL) {
+                    cJSON* code = cJSON_GetObjectItem(reply.payload, "code");
+                    if (code != nullptr && cJSON_IsNumber(code) && code->valueint == 0) {
+                        at_face_ok = true;
+                    }
                     sscma_client_reply_clear(&reply);
                 }
-                if (ret != ESP_OK) {
-                    ESP_LOGE(TAG, "[BENCH] AT+FACE=1 failed: %d", ret);
+                if (!at_face_ok) {
+                    ESP_LOGE(TAG, "[BENCH] AT+FACE=1 failed or rejected (ret=%d)", ret);
                     himax_face_warm_.store(false);
                     single_shot_want_image_.store(false);
                     single_shot_pending_.store(false);
@@ -1800,9 +1822,7 @@ void SscmaCamera::InitializeFaceMcpTools() {
     Settings settings("face", false);
     if (!face_model_available_.load()) {
         if (settings.GetInt("enable", 0) != 0) {
-            ESP_LOGW(TAG, "Face model not supported on WE2, resetting saved face enable -> 0");
-            Settings face_set("face", true);
-            face_set.SetInt("enable", 0);
+            ESP_LOGW(TAG, "Face model not supported on WE2, demoting face enable to 0 in memory (NVS unchanged)");
         }
         face_recognition_en_ = false;
     } else {

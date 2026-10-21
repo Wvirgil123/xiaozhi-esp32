@@ -77,7 +77,7 @@ private:
     TaskHandle_t task_ = nullptr;
     std::mutex mutex_;  // endpoint_ + last_result_
 
-    bool model_available_ = false;
+    std::atomic<bool> model_available_{false};
 
     // Settings namespace "face"
     std::atomic<int> mode_{0};  // 0 off, 1 detect-wake (local), 2 recognize-wake

@@ -143,10 +143,7 @@ public:
         settings_icon_ = CreateStatusIcon(MATERIAL_SYMBOLS_SETTINGS, OnSettingsClicked);
         volume_icon_ = CreateStatusIcon(MATERIAL_SYMBOLS_VOLUME_UP, OnVolumeClicked);
         face_icon_ = CreateStatusIcon(MATERIAL_SYMBOLS_PERSON, OnFaceClicked);
-        {
-            Settings settings("face", false);
-            ApplyFaceIconState(settings.GetInt("mode", 0));
-        }
+        ApplyFaceIconState(0);
 
         // Apply pre-flashed CJK text font from assets partition after SetupUI() has
         // populated screen and container widgets, avoiding uninitialized widget styling.
@@ -173,10 +170,7 @@ public:
         ApplyStatusIconStyle(settings_icon_);
         ApplyStatusIconStyle(volume_icon_);
         ApplyStatusIconStyle(face_icon_);
-        {
-            Settings settings("face", false);
-            ApplyFaceIconState(settings.GetInt("mode", 0));
-        }
+        ApplyFaceIconState(current_face_mode_);
         if (on_theme_changed_) {
             on_theme_changed_();
         }
@@ -228,6 +222,8 @@ public:
     // 0 = off (dimmed), 1 = detect-wake (full text color), 2 = recognize-wake
     // (accent).
     void ApplyFaceIconState(int mode) {
+        DisplayLockGuard lock(this);
+        current_face_mode_ = mode;
         if (face_icon_ == nullptr) {
             return;
         }
@@ -430,6 +426,7 @@ private:
     lv_obj_t* settings_icon_ = nullptr;
     lv_obj_t* volume_icon_ = nullptr;
     lv_obj_t* face_icon_ = nullptr;
+    int current_face_mode_ = 0;
     lv_point_t gesture_start_ = {};
     bool gesture_tracking_ = false;
 };

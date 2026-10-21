@@ -1398,6 +1398,10 @@ void WatcherSettingsUi::OnKnobRotate(bool clockwise) {
             lv_obj_scroll_to_view(mode_btns_[pending_vision_mode_], LV_ANIM_ON);
         }
     } else if (current_page_ == WatcherSettingsPage::Parameters) {
+        bool has_face_model = (camera_ != nullptr && camera_->IsFaceModelAvailable());
+        if (!has_face_model) {
+            return;
+        }
         {
             std::lock_guard<std::recursive_mutex> guard(mutex_);
             pending_threshold_ += (clockwise ? 0.02f : -0.02f);

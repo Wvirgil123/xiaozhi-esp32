@@ -527,14 +527,16 @@ bool FaceService::ApplyConfigJson(const std::string& body, std::string* error) {
         return false;
     }
     Settings settings("face", true);
+    bool mode_rejected = false;
     auto set_int = [&](const char* key, std::atomic<int>& target, int lo, int hi) {
         cJSON* item = cJSON_GetObjectItem(root, key);
         if (cJSON_IsNumber(item)) {
             int value = std::max(lo, std::min(hi, item->valueint));
-            if (strcmp(key, "mode") == 0 && value > 0 && !model_available_) {
+            if (strcmp(key, "mode") == 0 && value > 0 && !model_available_.load()) {
                 ESP_LOGW(TAG, "ApplyConfig: mode %d rejected (face model missing in flash)", value);
                 value = kModeOff;
-                if (error) *error = "face model not installed; mode fallback to 0";
+                mode_rejected = true;
+                if (error) *error = "face model not installed in flash; mode cannot be enabled";
             }
             settings.SetInt(key, value);
             target = value;
@@ -556,7 +558,7 @@ bool FaceService::ApplyConfigJson(const std::string& body, std::string* error) {
         endpoint_ = endpoint->valuestring;
     }
     cJSON_Delete(root);
-    return true;
+    return !mode_rejected;
 }
 
 void FaceService::RegisterMcpTools() {
