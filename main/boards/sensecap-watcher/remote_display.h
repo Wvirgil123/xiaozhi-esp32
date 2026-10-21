@@ -63,8 +63,8 @@ public:
     // 图像发送接口
     void SendPreviewImage(const uint8_t* jpeg_data, size_t size);
 
-    // Opus 音频转发 - 由 Application::OnIncomingAudio 回调调用
-    void ForwardOpusAudio(const std::vector<uint8_t>& opus_data, int sample_rate, int frame_duration);
+    // PCM 音频转发 - 由 SensecapAudioCodec::Write 调用，转发扬声器输出
+    void ForwardPcmAudio(const int16_t* data, int samples, int sample_rate);
 
 private:
     struct RetiredWebSocket {

@@ -1,4 +1,5 @@
 #include "sensecap_audio_codec.h"
+#include "remote_display.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -221,9 +222,12 @@ int SensecapAudioCodec::Read(int16_t* dest, int samples) {
 }
 
 int SensecapAudioCodec::Write(const int16_t* data, int samples) {
-    std::lock_guard<std::mutex> lock(data_if_mutex_);
-    if (output_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+    {
+        std::lock_guard<std::mutex> lock(data_if_mutex_);
+        if (output_enabled_) {
+            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+        }
     }
+    RemoteDisplay::GetInstance()->ForwardPcmAudio(data, samples, output_sample_rate_);
     return samples;
 }

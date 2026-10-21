@@ -77,12 +77,12 @@ static bool IsTcpReachable(const char* host, uint16_t port, int timeout_ms) {
 #define NVS_KEY_URL "url"
 #define NVS_KEY_TIMEOUT "timeout"
 
-// Opus 音频帧头结构 (little-endian)
-struct __attribute__((packed)) OpusAudioHeader {
-    uint8_t type;            // MSG_TYPE_AUDIO_FRAME (0x02)
-    uint16_t sample_rate;    // 采样率
-    uint8_t frame_duration;  // 帧时长 (ms)
-    // 后跟 Opus 编码数据
+// PCM 音频帧头结构 (little-endian)
+struct __attribute__((packed)) PcmAudioHeader {
+    uint8_t type;            // MSG_TYPE_AUDIO_PCM (0x03)
+    uint32_t sample_rate;    // 采样率
+    uint32_t samples;        // 采样点数
+    // 后跟 16-bit 单声道 PCM
 };
 
 RemoteDisplay* RemoteDisplay::GetInstance() {
@@ -753,13 +753,13 @@ void RemoteDisplay::AudioTask(void* arg) {
                 self->audio_queued_duration_ms_ -= frame.frame_duration;
             }
 
-            size_t total_size = sizeof(OpusAudioHeader) + frame.payload.size();
+            size_t total_size = sizeof(PcmAudioHeader) + frame.payload.size();
             std::vector<uint8_t> buffer(total_size);
-            auto* header = reinterpret_cast<OpusAudioHeader*>(buffer.data());
-            header->type = MSG_TYPE_AUDIO_FRAME;
-            header->sample_rate = static_cast<uint16_t>(frame.sample_rate);
-            header->frame_duration = static_cast<uint8_t>(frame.frame_duration);
-            memcpy(buffer.data() + sizeof(OpusAudioHeader), frame.payload.data(), frame.payload.size());
+            auto* header = reinterpret_cast<PcmAudioHeader*>(buffer.data());
+            header->type = MSG_TYPE_AUDIO_PCM;
+            header->sample_rate = static_cast<uint32_t>(frame.sample_rate);
+            header->samples = static_cast<uint32_t>(frame.payload.size() / sizeof(int16_t));
+            memcpy(buffer.data() + sizeof(PcmAudioHeader), frame.payload.data(), frame.payload.size());
 
             // Queue and send locks are never held together. Stop or a connection
             // switch invalidates the generation before this final send check.
@@ -789,14 +789,14 @@ void RemoteDisplay::AudioTask(void* arg) {
     vTaskDelete(nullptr);
 }
 
-void RemoteDisplay::ForwardOpusAudio(const std::vector<uint8_t>& opus_data, int sample_rate, int frame_duration) {
+void RemoteDisplay::ForwardPcmAudio(const int16_t* data, int samples, int sample_rate) {
     TaskHandle_t task = audio_task_;
     if (!running_ || !connected_ || !session_ready_ || !task) {
         return;
     }
 
-    if (opus_data.empty() || opus_data.size() > 4096 ||
-        frame_duration <= 0 || frame_duration > 120) {
+    int frame_duration = sample_rate > 0 ? samples * 1000 / sample_rate : 0;
+    if (data == nullptr || frame_duration <= 0 || frame_duration > 120) {
         audio_drop_count_.fetch_add(1);
         xTaskNotifyGive(task);
         return;
@@ -820,7 +820,8 @@ void RemoteDisplay::ForwardOpusAudio(const std::vector<uint8_t>& opus_data, int 
     }
 
     AudioFrame frame;
-    frame.payload = opus_data;
+    auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    frame.payload.assign(bytes, bytes + samples * sizeof(int16_t));
     frame.sample_rate = sample_rate;
     frame.frame_duration = frame_duration;
     frame.connect_generation = connect_generation_.load();
@@ -838,7 +839,7 @@ void RemoteDisplay::SendHello() {
     cJSON_AddStringToObject(root, "mode", "ui_state");
 
     cJSON* audio = cJSON_CreateObject();
-    cJSON_AddStringToObject(audio, "format", "opus");
+    cJSON_AddStringToObject(audio, "format", "pcm");
     cJSON_AddItemToObject(root, "audio", audio);
 
     char* json_str = cJSON_PrintUnformatted(root);
