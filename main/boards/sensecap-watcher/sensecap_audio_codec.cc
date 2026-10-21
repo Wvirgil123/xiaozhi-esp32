@@ -1,5 +1,6 @@
 #include "sensecap_audio_codec.h"
 #include "remote_display.h"
+#include "settings.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -151,6 +152,15 @@ void SensecapAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, 
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
     ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
     ESP_LOGI(TAG, "Duplex channels created");
+}
+
+void SensecapAudioCodec::Start() {
+    // A volume of 0 saved in NVS comes back at 70 here instead of the common default of 10
+    bool saved_mute = Settings("audio", false).GetInt("output_volume", output_volume_) <= 0;
+    AudioCodec::Start();
+    if (saved_mute) {
+        output_volume_ = 70;
+    }
 }
 
 void SensecapAudioCodec::SetOutputVolume(int volume) {

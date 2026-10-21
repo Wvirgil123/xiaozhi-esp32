@@ -32,6 +32,7 @@ public:
         gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr, bool input_reference);
     virtual ~SensecapAudioCodec();
 
+    virtual void Start() override;
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
