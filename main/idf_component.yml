@@ -53,7 +53,14 @@ dependencies:
     - if: target in [esp32s3]
   espressif/esp_video:
     version: ^2.4.1
-    rules:
+    # The first true clause wins. reTerminal D1001 ships ESP32-P4 < v3.0:
+    # esp_ipa 2.3.0 and 2.4.0 (pulled by esp_video 2.4.x / 2.5.x) build their
+    # esp32p4 libraries with the Zb extension, which those chips lack, so
+    # esp_ipa_pipeline_create dies with an illegal instruction. esp_video
+    # 2.3.x depends on esp_ipa 2.2.*, whose libraries are Zb-free.
+    matches:
+    - if: $CONFIG{BOARD_TYPE_RETERMINAL_D1001} == True
+      version: ~2.3.0
     - if: target in [esp32p4, esp32s3, esp32s31]
 
   espressif/esp_image_effects:

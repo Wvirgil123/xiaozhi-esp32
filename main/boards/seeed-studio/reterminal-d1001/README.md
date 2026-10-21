@@ -69,10 +69,13 @@ Wiring notes:
 - Idle internal SRAM drops from ~248-250 KB to 244007 free / 231683 minimal
   with the camera open. The frame buffers live in PSRAM.
 
-#### ISP pipeline controller is off on this board
+#### ISP pipeline controller and the esp_video pin
 
-`CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=n` overrides the P4 default.
-With it enabled the firmware panics right after the sensor is detected:
+The board enables `CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER=y` and
+`main/idf_component.yml` pins `espressif/esp_video` to `~2.3.0` for this board
+only (a `matches` clause on `$CONFIG{BOARD_TYPE_RETERMINAL_D1001}`; other
+targets keep `^2.4.1`). With the unpinned version the firmware panics right
+after the sensor is detected:
 
 ```
 I (2869) sc202cs: Detected Camera sensor PID=0xeb52
@@ -81,19 +84,19 @@ MEPC : 0x481991a0   MCAUSE : 0x00000002   MTVAL : 0x20fac7b3
 ```
 
 `0x481991a0` is inside `esp_ipa_pipeline_create()` and `0x20fac7b3` decodes as
-`sh2add`, a RISC-V Zba instruction. The prebuilt `libesp_ipa.a` that
-`espressif/esp_ipa` 2.3.0 ships for ESP-IDF >= 6.0 is built for
-`rv32i..._zba1p0_zbb1p0_zbs1p0`, while the 5.5 and 5.4 blobs in the same
-component are not; `esp_ipa/CMakeLists.txt` picks the blob by IDF version
-only, with no ESP32-P4 revision check. This board is a P4 v1.3
-(`CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`), which has no B extension, so every
-IPA call traps. Turning the pipeline controller off removes the only caller
-of `esp_ipa`.
+`sh2add`, a RISC-V Zba instruction. The prebuilt esp32p4 `libesp_ipa.a` for
+ESP-IDF >= 6.0 is built for `rv32i..._zba1p0_zbb1p0_zbs1p0` in `esp_ipa` 2.3.0
+(211 Zb instructions per objdump) and 2.4.0 (242), and with no Zb in 2.2.0~1;
+`esp_ipa/CMakeLists.txt` picks the blob by IDF version only, with no ESP32-P4
+revision check. This board is a P4 v1.3
+(`CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`), which has no B extension.
+`esp_video` 2.3.x is the newest line that depends on `esp_ipa` 2.2.*, so the
+pin keeps auto exposure and auto white balance running.
 
-The cost is that auto exposure, auto white balance and the rest of the IPA
-loop do not run, so colour and exposure use the static ISP defaults. Re-enable
-the option once `esp_ipa` ships a P4-rev-aware blob (or an IDF 6 blob without
-Zba) and re-check the capture.
+The static exposure/gain/white-balance defaults in `StartNetwork()` (and
+`POST /camera/tune`) remain as the fallback for builds with the controller
+disabled. Drop the pin once `esp_ipa` ships a P4-rev-aware or Zb-free IDF 6
+blob, and re-check the capture.
 
 ### Wake word and internal RAM
 
