@@ -45,12 +45,14 @@ struct WifiScanItem {
     std::string ssid;
     int8_t rssi;
     bool encrypted;
+    uint8_t channel = 0;
 };
 
 class SettingsUi {
 public:
     using ConnectCallback = std::function<void(const std::string& ssid,
-                                               const std::string& password)>;
+                                               const std::string& password,
+                                               uint8_t channel)>;
     using CloseCallback = std::function<void()>;
     // Fonts are owned by the theme and are freed when the theme is reloaded, so
     // they are always fetched through this hook and never cached.
@@ -201,7 +203,7 @@ private:
     void StartWifiScan();
     void ShowWifiList();
     void ShowManualSsid();
-    void ShowPasswordInput(const std::string& ssid, bool encrypted);
+    void ShowPasswordInput(const std::string& ssid, bool encrypted, uint8_t channel = 0);
     void ShowSavedList();
     void ShowConnecting(const std::string& ssid);
     void ShowResult(bool success, const char* message);
@@ -236,6 +238,7 @@ private:
     std::vector<std::string> saved_ssids_;
     std::string pending_ssid_;
     bool pending_encrypted_ = true;
+    uint8_t pending_channel_ = 0;
     int pending_rotation_ = 0;
     // Level restored by the mute button; only ever holds a non-zero volume.
     int volume_restore_ = 60;

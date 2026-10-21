@@ -637,10 +637,17 @@ private:
         if (settings_ui_ == nullptr) {
             settings_ui_.reset(new SettingsUi(
                 display_,
-                [this](const std::string& ssid, const std::string& password) {
-                    ConnectFromSettings(ssid, password);
+                [this](const std::string& ssid, const std::string& password, uint8_t channel) {
+                    ConnectFromSettings(ssid, password, channel);
                 },
-                [this]() { display_->SetStatusBarEntriesHidden(false); }));
+                [this]() {
+                    display_->SetStatusBarEntriesHidden(false);
+                    auto& wifi_manager = WifiManager::GetInstance();
+                    if (!wifi_manager.IsConnected() && !wifi_manager.IsConfigMode()) {
+                        wifi_manager.StartStation();
+                        ApplyStaticIpIfConfigured();
+                    }
+                }));
             settings_ui_->SetIconFontProvider(
                 [this](bool large) { return display_->GetIconFont(large); });
             settings_ui_->SetPowerSaveChangedCallback([this]() { ApplyPowerSaveConfig(); });
@@ -674,8 +681,8 @@ private:
 
     // Runs on a worker task: swap the credentials in, restart the station and
     // wait for the link. On failure the previous credentials are restored.
-    void ConnectFromSettings(const std::string& ssid, const std::string& password) {
-        auto* request = new ConnectRequest{this, ssid, password};
+    void ConnectFromSettings(const std::string& ssid, const std::string& password, uint8_t channel) {
+        auto* request = new ConnectRequest{this, ssid, password, channel};
         BaseType_t ok = xTaskCreate(
             [](void* arg) {
                 std::unique_ptr<ConnectRequest> request(static_cast<ConnectRequest*>(arg));
@@ -693,38 +700,51 @@ private:
         ReTerminalD1001Board* board;
         std::string ssid;
         std::string password;
+        uint8_t channel = 0;
     };
 
     void RunConnect(const ConnectRequest& request) {
         auto& ssid_manager = SsidManager::GetInstance();
 
-        // Snapshot the previous entry so a failed attempt can be rolled back.
-        bool existed = false;
-        std::string old_password;
-        for (const auto& item : ssid_manager.GetSsidList()) {
-            if (item.ssid == request.ssid) {
-                existed = true;
-                old_password = item.password;
-                break;
-            }
-        }
-        ssid_manager.AddSsid(request.ssid, request.password);
-
-        auto& wifi_manager = WifiManager::GetInstance();
+        // 1. Reset protocol if application was active
         auto& app = Application::GetInstance();
         auto state = app.GetDeviceState();
         if (state == kDeviceStateIdle || state == kDeviceStateListening ||
             state == kDeviceStateSpeaking) {
-            // Tear the protocol down before the link is taken away.
-            EnterWifiConfigMode();
-            for (int i = 0; i < 60 && !IsInWifiConfigMode(); i++) {
-                vTaskDelay(pdMS_TO_TICKS(100));
+            app.ResetProtocol();
+        }
+
+        // 2. Stop any existing station or config AP so state machine starts fresh
+        auto& wifi_manager = WifiManager::GetInstance();
+        if (wifi_manager.IsConfigMode()) {
+            wifi_manager.StopConfigAp();
+        }
+        wifi_manager.StopStation();
+
+        // 3. Snapshot previous entry in SsidManager (if it existed) for rollback
+        bool existed = false;
+        std::string old_password;
+        uint8_t old_channel = 0;
+        for (const auto& item : ssid_manager.GetSsidList()) {
+            if (item.ssid == request.ssid) {
+                existed = true;
+                old_password = item.password;
+                old_channel = item.channel;
+                break;
             }
         }
 
-        ESP_LOGI(TAG, "Connecting to %s from the settings UI", request.ssid.c_str());
-        wifi_manager.StartStation();
+        // Add the new SSID with channel hint to SsidManager (placed at index 0)
+        ssid_manager.AddSsid(request.ssid, request.password, request.channel);
 
+        ESP_LOGI(TAG, "Connecting to %s (channel %u) from settings UI", request.ssid.c_str(),
+                 request.channel);
+
+        // 4. Start station cleanly
+        wifi_manager.StartStation();
+        ApplyStaticIpIfConfigured();
+
+        // 5. Poll for connection (up to 20 seconds)
         bool success = false;
         for (int i = 0; i < 200; i++) {
             if (wifi_manager.IsConnected() && wifi_manager.GetSsid() == request.ssid) {
@@ -739,7 +759,7 @@ private:
             message = "已连接到 " + request.ssid + "\nIP: " + wifi_manager.GetIpAddress();
         } else {
             message = "无法连接到 " + request.ssid + "，请检查密码后重试";
-            // Roll the credentials back so a wrong password is not kept.
+            // Roll back SsidManager so a bad credential doesn't persist
             const auto& list = ssid_manager.GetSsidList();
             for (size_t i = 0; i < list.size(); i++) {
                 if (list[i].ssid == request.ssid) {
@@ -748,7 +768,13 @@ private:
                 }
             }
             if (existed) {
-                ssid_manager.AddSsid(request.ssid, old_password);
+                ssid_manager.AddSsid(request.ssid, old_password, old_channel);
+            }
+            // Stop and restart station with original credentials if any exist
+            wifi_manager.StopStation();
+            if (!ssid_manager.GetSsidList().empty()) {
+                wifi_manager.StartStation();
+                ApplyStaticIpIfConfigured();
             }
         }
         settings_ui_->OnConnectResult(success, message);

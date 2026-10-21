@@ -1024,17 +1024,32 @@ void SettingsUi::StartWifiScan() {
             std::unique_ptr<ScanTaskArgs> args(static_cast<ScanTaskArgs*>(arg));
             std::vector<WifiScanItem> results;
 
+            // Stop WifiStation and ConfigAp so that no background auto-connect or auto-scan runs,
+            // and no event handlers steal the scan results upon WIFI_EVENT_SCAN_DONE.
+            auto& wifi_manager = WifiManager::GetInstance();
+            if (wifi_manager.IsConfigMode()) {
+                wifi_manager.StopConfigAp();
+            }
+            wifi_manager.StopStation();
+
+            // Ensure default STA netif exists and driver is started in STA mode
+            esp_netif_t* sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            if (sta_netif == nullptr) {
+                sta_netif = esp_netif_create_default_wifi_sta();
+            }
+            esp_wifi_set_mode(WIFI_MODE_STA);
+            esp_err_t err = esp_wifi_start();
+            if (err != ESP_OK && err != ESP_ERR_WIFI_STATE) {
+                ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
+            }
+
             wifi_scan_config_t scan_config = {};
             scan_config.show_hidden = false;
             scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
             scan_config.scan_time.active.min = 100;
             scan_config.scan_time.active.max = 300;
 
-            // Ensure WiFi station mode is started before scanning
-            auto& wifi_manager = WifiManager::GetInstance();
-            wifi_manager.StartStation();
-
-            esp_err_t err = ESP_FAIL;
+            err = ESP_FAIL;
             for (int retry = 0; retry < 5; retry++) {
                 err = esp_wifi_scan_start(&scan_config, true);
                 if (err == ESP_ERR_WIFI_NOT_STARTED) {
@@ -1055,15 +1070,39 @@ void SettingsUi::StartWifiScan() {
                     auto* records = new wifi_ap_record_t[wanted];
                     err = esp_wifi_scan_get_ap_records(&wanted, records);
                     if (err == ESP_OK) {
+                        // Deduplicate by SSID, keep highest RSSI
+                        std::vector<WifiScanItem> parsed;
                         for (uint16_t i = 0; i < wanted; i++) {
+                            std::string ssid = reinterpret_cast<char*>(records[i].ssid);
+                            if (ssid.empty()) {
+                                continue;
+                            }
                             WifiScanItem item;
-                            item.ssid = std::string(reinterpret_cast<char*>(records[i].ssid));
+                            item.ssid = ssid;
                             item.rssi = records[i].rssi;
-                            item.encrypted = records[i].authmode != WIFI_AUTH_OPEN;
-                            if (!item.ssid.empty()) {
-                                results.push_back(item);
+                            item.encrypted = (records[i].authmode != WIFI_AUTH_OPEN);
+                            item.channel = records[i].primary;
+
+                            bool found = false;
+                            for (auto& existing : parsed) {
+                                if (existing.ssid == ssid) {
+                                    if (item.rssi > existing.rssi) {
+                                        existing.rssi = item.rssi;
+                                        existing.channel = item.channel;
+                                    }
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                parsed.push_back(item);
                             }
                         }
+                        std::sort(parsed.begin(), parsed.end(),
+                                  [](const WifiScanItem& a, const WifiScanItem& b) {
+                                      return a.rssi > b.rssi;
+                                  });
+                        results = std::move(parsed);
                     }
                     delete[] records;
                 }
@@ -1081,6 +1120,7 @@ void SettingsUi::StartWifiScan() {
     if (ok != pdPASS) {
         delete args;
         ESP_LOGE(TAG, "Failed to create the scan task");
+        OnScanComplete({}, ESP_FAIL, scan_generation_);
     }
 }
 
@@ -1107,10 +1147,11 @@ void SettingsUi::ShowManualSsid() {
     keyboard_ = MakeKeyboard(body, textarea_, Action::WifiManualNext);
 }
 
-void SettingsUi::ShowPasswordInput(const std::string& ssid, bool encrypted) {
+void SettingsUi::ShowPasswordInput(const std::string& ssid, bool encrypted, uint8_t channel) {
     wifi_state_ = WifiSettingsState::InputPassword;
     pending_ssid_ = ssid;
     pending_encrypted_ = encrypted;
+    pending_channel_ = channel;
 
     lv_obj_t* body = BuildPage(ssid.c_str(), Action::WifiPasswordCancel, false);
 
@@ -1935,7 +1976,8 @@ void SettingsUi::HandleAction(Action action, int index) {
         }
         case Action::WifiPickScanned:
             if (index >= 0 && index < (int)scan_results_.size()) {
-                ShowPasswordInput(scan_results_[index].ssid, scan_results_[index].encrypted);
+                ShowPasswordInput(scan_results_[index].ssid, scan_results_[index].encrypted,
+                                  scan_results_[index].channel);
             }
             return;
         case Action::WifiTogglePassword:
@@ -1955,10 +1997,11 @@ void SettingsUi::HandleAction(Action action, int index) {
                 return;
             }
             std::string ssid = pending_ssid_;
+            uint8_t channel = pending_channel_;
             operation_active_ = true;
             ShowConnecting(ssid);
             if (connect_cb_) {
-                connect_cb_(ssid, password);
+                connect_cb_(ssid, password, channel);
             }
             return;
         }
@@ -1972,12 +2015,14 @@ void SettingsUi::HandleAction(Action action, int index) {
             }
             std::string ssid = list[index].ssid;
             std::string password = list[index].password;
+            uint8_t channel = list[index].channel;
             pending_ssid_ = ssid;
             pending_encrypted_ = !password.empty();
+            pending_channel_ = channel;
             operation_active_ = true;
             ShowConnecting(ssid);
             if (connect_cb_) {
-                connect_cb_(ssid, password);
+                connect_cb_(ssid, password, channel);
             }
             return;
         }
