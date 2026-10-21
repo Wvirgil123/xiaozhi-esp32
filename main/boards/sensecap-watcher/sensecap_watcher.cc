@@ -39,6 +39,8 @@
 #include <esp_console.h>
 #include <esp_mac.h>
 #include <nvs_flash.h>
+#include <esp_heap_caps.h>
+#include <cJSON.h>
 #include <nvs.h>
 #include <esp_netif.h>
 #include <esp_event.h>
@@ -235,6 +237,13 @@ class CustomLcdDisplay : public SpiLcdDisplay {
         lv_point_t screen_touch_start_ = {0, 0};
         bool screen_touch_tracking_ = false;
 };
+
+// Route cJSON allocations to PSRAM (internal RAM as fallback). Large parse
+// trees (~8KB per sscma face event frame) would otherwise land in internal SRAM
+// and starve it when a TLS handshake overlaps the wake window.
+static void* PsramJsonMalloc(size_t size) {
+    return heap_caps_malloc_prefer(size, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_8BIT);
+}
 
 class SensecapWatcher : public WifiBoard {
 private:
@@ -1312,6 +1321,11 @@ private:
 public:
     SensecapWatcher() {
         ESP_LOGI(TAG, "Initialize Sensecap Watcher");
+        // Before the first cJSON user (sscma_client_init in InitializeCamera).
+        // free() releases both PSRAM and internal blocks, so objects allocated
+        // before the hooks are still freed correctly.
+        cJSON_Hooks hooks = {.malloc_fn = PsramJsonMalloc, .free_fn = free};
+        cJSON_InitHooks(&hooks);
         // 创建 I2C 操作互斥锁（必须在 InitializeExpander 之前）
         io_exp_mutex_ = xSemaphoreCreateMutex();
         assert(io_exp_mutex_ != nullptr);
