@@ -346,8 +346,8 @@ bool RemoteDisplay::StartLocked(const std::string& server_url, int timeout_ms,
         }
     });
 
-    websocket_->OnError([](int error) {
-        ESP_LOGE(TAG, "WebSocket error: %d", error);
+    websocket_->OnError([](const auto& error) {
+        ESP_LOGE(TAG, "WebSocket error code=%d native=%d", (int)error.code, error.native);
     });
 
     // Quick TCP reachability check to avoid 18s LWIP SYN retry timeout

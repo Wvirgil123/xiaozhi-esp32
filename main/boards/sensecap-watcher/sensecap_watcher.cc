@@ -1179,15 +1179,6 @@ private:
         xTaskCreate([](void* arg) {
             auto* self = static_cast<SensecapWatcher*>(arg);
 
-            // 注册 Opus 音频转发回调
-            Application::GetInstance().SetOpusForwardCallback(
-                [](const std::vector<uint8_t>& opus_data, int sample_rate, int frame_duration) {
-                    auto* remote = RemoteDisplay::GetInstance();
-                    if (remote && remote->IsRunning()) {
-                        remote->ForwardOpusAudio(opus_data, sample_rate, frame_duration);
-                    }
-                });
-
             // 等待 WiFi 真正连接
             ESP_LOGI(TAG, "Waiting for WiFi connection before starting remote display...");
             auto& wifi = WifiManager::GetInstance();
@@ -1229,21 +1220,17 @@ private:
             "树莓派需手动输入本设备 IP，通过 HTTP 发起连接。\n"
             "不传参数则查询当前投屏状态。",
             PropertyList({
-                Property("enable", kPropertyTypeInteger, 0, 1)
+                Property("enable", kPropertyTypeInteger, -1, -1, 1)
             }),
             [this](const PropertyList& properties) -> ReturnValue {
-                try {
-                    const Property& enable_prop = properties["enable"];
-                    int en = enable_prop.value<int>();
-                    ESP_LOGI(TAG, "screen_cast tool called: enable=%d", en);
-                    if (en == 1) {
-                        return StartScreenCast();
-                    } else {
-                        return StopScreenCast();
-                    }
-                } catch (const std::runtime_error& e) {
-                    // 没传参数 → 查询状态
-                    ESP_LOGW(TAG, "screen_cast tool: no enable param, caught: %s", e.what());
+                int en = properties["enable"].value<int>();
+                ESP_LOGI(TAG, "screen_cast tool called: enable=%d", en);
+                if (en == 1) {
+                    return StartScreenCast();
+                } else if (en == 0) {
+                    return StopScreenCast();
+                } else {
+                    // 没传参数 (-1) → 查询状态
                     auto* remote = RemoteDisplay::GetInstance();
                     bool casting = remote && remote->IsRunning();
                     auto config = RemoteDisplay::LoadConfig();
@@ -1342,8 +1329,6 @@ public:
         InitializeKnob();
         InitializeRemoteDisplay();
     }
-
-    virtual bool SuppressCommonDeviceTools() const override { return true; }
 
     virtual AudioCodec* GetAudioCodec() override {
         static SensecapAudioCodec audio_codec(
