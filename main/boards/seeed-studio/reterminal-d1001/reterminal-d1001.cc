@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "assets.h"
+#include "assets/lang_config.h"
 #include "button.h"
 #include "config.h"
 #include "display/lcd_display.h"
@@ -895,6 +896,41 @@ private:
         ESP_LOGI(TAG, "Camera initialized");
     }
 
+    // WifiBoard's connect timeout stops the station and starts the phone
+    // provisioning AP, after which the board no longer reconnects on its own
+    // when the router comes back. This board has a touch Wi-Fi setup in the
+    // status bar, so the timeout only prompts for it and the station keeps
+    // retrying. The base class starts and stops connect_timer_ by handle, so
+    // swapping the timer here changes the callback and nothing else; the base
+    // destructor deletes whichever timer the handle points to.
+    void InstallWifiPromptTimer() {
+        esp_timer_handle_t prompt_timer = nullptr;
+        const esp_timer_create_args_t timer_args = {
+            .callback =
+                [](void*) {
+                    ESP_LOGW(TAG, "Wi-Fi connect timeout; prompting on-screen setup");
+                    Application::GetInstance().Schedule([]() {
+                        Application::GetInstance().Alert(
+                            "未连接网络", "点击左上角网络图标，可在屏幕上直接配置 Wi-Fi", "gear",
+                            Lang::Sounds::OGG_WIFICONFIG);
+                    });
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "d1001_wifi_prompt",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&timer_args, &prompt_timer) != ESP_OK) {
+            ESP_LOGE(TAG, "Wi-Fi prompt timer not created; keeping the config AP fallback");
+            return;
+        }
+        if (connect_timer_ != nullptr) {
+            esp_timer_stop(connect_timer_);
+            esp_timer_delete(connect_timer_);
+        }
+        connect_timer_ = prompt_timer;
+    }
+
 public:
     // A 3 s hold powers the board down; a short press keeps its old meaning
     // (Wi-Fi config while starting, chat toggle afterwards).
@@ -929,6 +965,7 @@ public:
         InitializeTouch(rotation);
         InitializeCamera();
         InitializeButtons();
+        InstallWifiPromptTimer();
 
         GetBacklight()->RestoreBrightness();
 
