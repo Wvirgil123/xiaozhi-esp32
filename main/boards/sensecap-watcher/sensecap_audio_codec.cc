@@ -72,6 +72,9 @@ SensecapAudioCodec::SensecapAudioCodec(void* i2c_master_handle, int input_sample
     input_dev_ = esp_codec_dev_new(&dev_cfg);
     assert(input_dev_ != NULL);
 
+    // Keep I2S channels always running. close() will only close the codec
+    // device without disabling the I2S channel. This avoids full-duplex I2S
+    // state issues when enabling/disabling input and output independently.
     esp_codec_set_disable_when_closed(output_dev_, false);
     esp_codec_set_disable_when_closed(input_dev_, false);
 
@@ -153,47 +156,55 @@ void SensecapAudioCodec::SetOutputVolume(int volume) {
     AudioCodec::SetOutputVolume(volume);
 }
 
+void SensecapAudioCodec::OpenInputDev() {
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = 16,
+        .channel = 2,
+        .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1),
+        .sample_rate = (uint32_t)output_sample_rate_,
+        .mclk_multiple = 0,
+    };
+    ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
+    ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(input_dev_, 27.0));
+}
+
+void SensecapAudioCodec::OpenOutputDev() {
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = 16,
+        .channel = 1,
+        .channel_mask = 0,
+        .sample_rate = (uint32_t)output_sample_rate_,
+        .mclk_multiple = 0,
+    };
+    ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
+    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+}
+
 void SensecapAudioCodec::EnableInput(bool enable) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == input_enabled_) {
         return;
     }
     if (enable) {
-        esp_codec_dev_sample_info_t fs = {
-            .bits_per_sample = 16,
-            .channel = 2,
-            .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1),
-            .sample_rate = (uint32_t)output_sample_rate_,
-            .mclk_multiple = 0,
-        };
-        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(input_dev_, 27.0));
+        OpenInputDev();
     } else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        esp_codec_dev_close(input_dev_);
     }
     AudioCodec::EnableInput(enable);
 }
 
 void SensecapAudioCodec::EnableOutput(bool enable) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == output_enabled_) {
         return;
     }
     if (enable) {
-        // Play 16bit 1 channel
-        esp_codec_dev_sample_info_t fs = {
-            .bits_per_sample = 16,
-            .channel = 1,
-            .channel_mask = 0,
-            .sample_rate = (uint32_t)output_sample_rate_,
-            .mclk_multiple = 0,
-        };
-        ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        OpenOutputDev();
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 1);
         }
-    } 
-    else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+    } else {
+        esp_codec_dev_close(output_dev_);
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 0);
         }
@@ -202,6 +213,7 @@ void SensecapAudioCodec::EnableOutput(bool enable) {
 }
 
 int SensecapAudioCodec::Read(int16_t* dest, int samples) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (input_enabled_) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
     }
@@ -209,6 +221,7 @@ int SensecapAudioCodec::Read(int16_t* dest, int samples) {
 }
 
 int SensecapAudioCodec::Write(const int16_t* data, int samples) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (output_enabled_) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }
