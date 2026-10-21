@@ -54,8 +54,20 @@ static bool __himax_keepalive_check(sscma_client_handle_t client)
 
 SscmaCamera* SscmaCamera::instance_ = nullptr;
 
+// Added to sscma_client by Seeed-Studio/SenseCAP-Watcher-Firmware#70. Weak so
+// the board still links against releases without it; the call takes effect
+// once a component release that carries it is resolved.
+extern "C" void sscma_client_set_drop_events(sscma_client_handle_t client, bool drop)
+    __attribute__((weak));
+
 void SscmaCamera::SetDropEvents(bool drop) {
-    // Drop events is managed internally in standard sscma_client
+    if (sscma_client_set_drop_events == nullptr) {
+        return;
+    }
+    if (instance_ != nullptr && instance_->sscma_client_handle_ != nullptr) {
+        sscma_client_set_drop_events(instance_->sscma_client_handle_, drop);
+        ESP_LOGI(TAG, "sscma drop_events=%d", drop ? 1 : 0);
+    }
 }
 
 SscmaCamera::SscmaCamera(esp_io_expander_handle_t io_exp_handle) {
