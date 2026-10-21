@@ -276,7 +276,8 @@ private:
                 IoExpanderSetLevel(BSP_PWR_SYSTEM, 0);
             }
         });
-        power_save_timer_->SetEnabled(true);
+        // 默认不启用，由 GetBatteryLevel() 采样后根据实际供电状态动态管理
+        power_save_timer_->SetEnabled(false);
     }
 
     void InitializeI2c() {
@@ -1389,7 +1390,7 @@ public:
     }
 
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging) override {
-        static bool last_discharging = false;
+        static int last_discharging = -1;
         static int low_battery_streak = 0;
         charging = (IoExpanderGetLevel(BSP_PWR_VBUS_IN_DET) == 0);
         discharging = !charging;
@@ -1412,9 +1413,9 @@ public:
             low_battery_streak = 0;
         }
 
-        if (discharging != last_discharging) {
+        if ((int)discharging != last_discharging) {
             power_save_timer_->SetEnabled(discharging);
-            last_discharging = discharging;
+            last_discharging = (int)discharging;
         }
         return true;
     }
