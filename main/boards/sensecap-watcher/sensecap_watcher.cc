@@ -1345,6 +1345,13 @@ public:
             AUDIO_CODEC_ES8311_ADDR, 
             AUDIO_CODEC_ES7243E_ADDR, 
             AUDIO_INPUT_REFERENCE);
+        static bool pa_cb_set = false;
+        if (!pa_cb_set) {
+            audio_codec.SetPowerAmpCallback([this](bool on) {
+                IoExpanderSetLevel(BSP_PWR_CODEC_PA, on ? 1 : 0);
+            });
+            pa_cb_set = true;
+        }
         return &audio_codec;
     }
 

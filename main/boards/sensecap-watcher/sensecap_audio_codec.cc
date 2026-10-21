@@ -158,6 +158,7 @@ void SensecapAudioCodec::SetOutputVolume(int volume) {
 }
 
 void SensecapAudioCodec::EnableInput(bool enable) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == input_enabled_) {
         return;
     }
@@ -180,6 +181,7 @@ void SensecapAudioCodec::EnableInput(bool enable) {
 }
 
 void SensecapAudioCodec::EnableOutput(bool enable) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == output_enabled_) {
         return;
     }
@@ -197,7 +199,13 @@ void SensecapAudioCodec::EnableOutput(bool enable) {
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 1);
         }
+        if (pa_callback_) {
+            pa_callback_(true);
+        }
     } else {
+        if (pa_callback_) {
+            pa_callback_(false);
+        }
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 0);
@@ -209,6 +217,7 @@ void SensecapAudioCodec::EnableOutput(bool enable) {
 }
 
 int SensecapAudioCodec::Read(int16_t* dest, int samples) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (input_enabled_) {
         esp_err_t ret = esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
         if (ret != ESP_CODEC_DEV_OK) {
@@ -222,6 +231,7 @@ int SensecapAudioCodec::Read(int16_t* dest, int samples) {
 }
 
 int SensecapAudioCodec::Write(const int16_t* data, int samples) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (output_enabled_) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }
