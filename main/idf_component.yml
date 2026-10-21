@@ -100,7 +100,7 @@ dependencies:
   espressif/esp_lcd_touch_spd2010:
     version: ^2.1.0
     rules:
-    - if: target in [esp32s3]
+    - if: target == esp32s3 && $CONFIG{BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER} == True
 
   tny-robotics/sh1106-esp-idf: ^1.0.1
   espressif/esp_lcd_jd9365:
@@ -134,7 +134,7 @@ dependencies:
   espressif/human_face_detect:
     version: ~0.5.0
     rules:
-    - if: target in [esp32p4]
+    - if: target == esp32p4 && $CONFIG{BOARD_TYPE_RETERMINAL_D1001} == True
   espfriends/servo_dog_ctrl:
     version: ^0.2.0
     rules:
