@@ -434,6 +434,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_RYMCU_BIGSMART
         bool "RYMCU BigSmart"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_RETERMINAL_D1001
+        bool "Seeed Studio reTerminal D1001"
+        depends on IDF_TARGET_ESP32P4
     config BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER
         bool "Seeed Studio SenseCAP Watcher"
         depends on IDF_TARGET_ESP32S3
@@ -1075,6 +1078,19 @@ config AUDIO_DEBUG_UDP_SERVER
     depends on USE_AUDIO_DEBUGGER
     help
         UDP server address, format: IP:PORT, used to receive audio debugging data
+
+config MQTT_UDP_FALLBACK_TO_WEBSOCKET
+    bool "Fall back to WebSocket when MQTT's UDP audio is blocked"
+    default y
+    help
+        The MQTT protocol carries audio over UDP, which some networks (e.g.
+        behind transparent proxies) silently drop: text messages still work,
+        but the server never hears the user and TTS audio never arrives.
+        When a TTS segment announces sentences but delivers no UDP audio
+        and the OTA config also provides a WebSocket endpoint, remember the
+        network and reboot onto the WebSocket protocol. The fallback lasts 10 boots on
+        that network, doubling (up to 200) if UDP is still blocked when
+        MQTT is retried.
 
 config RECEIVE_CUSTOM_MESSAGE
     bool "Enable Custom Message Reception"

@@ -3,11 +3,13 @@
 
 #include "audio_codec.h"
 
+#include <mutex>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
 
 class SensecapAudioCodec : public AudioCodec {
 private:
+    std::mutex data_if_mutex_;
     const audio_codec_data_if_t* data_if_ = nullptr;
     const audio_codec_ctrl_if_t* out_ctrl_if_ = nullptr;
     const audio_codec_if_t* out_codec_if_ = nullptr;
@@ -30,6 +32,7 @@ public:
         gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr, bool input_reference);
     virtual ~SensecapAudioCodec();
 
+    virtual void Start() override;
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;

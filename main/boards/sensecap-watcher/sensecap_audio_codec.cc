@@ -1,5 +1,8 @@
 #include "sensecap_audio_codec.h"
+#include "remote_display.h"
+#include "settings.h"
 
+#include <cstring>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
@@ -72,6 +75,9 @@ SensecapAudioCodec::SensecapAudioCodec(void* i2c_master_handle, int input_sample
     input_dev_ = esp_codec_dev_new(&dev_cfg);
     assert(input_dev_ != NULL);
 
+    // Keep I2S channels always running. close() will only close the codec
+    // device without disabling the I2S channel. This avoids full-duplex I2S
+    // state issues when enabling/disabling input and output independently.
     esp_codec_set_disable_when_closed(output_dev_, false);
     esp_codec_set_disable_when_closed(input_dev_, false);
 
@@ -148,12 +154,22 @@ void SensecapAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, 
     ESP_LOGI(TAG, "Duplex channels created");
 }
 
+void SensecapAudioCodec::Start() {
+    // A volume of 0 saved in NVS comes back at 70 here instead of the common default of 10
+    bool saved_mute = Settings("audio", false).GetInt("output_volume", output_volume_) <= 0;
+    AudioCodec::Start();
+    if (saved_mute) {
+        output_volume_ = 70;
+    }
+}
+
 void SensecapAudioCodec::SetOutputVolume(int volume) {
     ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, volume));
     AudioCodec::SetOutputVolume(volume);
 }
 
 void SensecapAudioCodec::EnableInput(bool enable) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == input_enabled_) {
         return;
     }
@@ -174,6 +190,7 @@ void SensecapAudioCodec::EnableInput(bool enable) {
 }
 
 void SensecapAudioCodec::EnableOutput(bool enable) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == output_enabled_) {
         return;
     }
@@ -191,8 +208,7 @@ void SensecapAudioCodec::EnableOutput(bool enable) {
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 1);
         }
-    } 
-    else {
+    } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 0);
@@ -202,15 +218,26 @@ void SensecapAudioCodec::EnableOutput(bool enable) {
 }
 
 int SensecapAudioCodec::Read(int16_t* dest, int samples) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+        esp_err_t ret = esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t));
+        if (ret != ESP_CODEC_DEV_OK) {
+            std::memset(dest, 0, samples * sizeof(int16_t));
+            return 0;
+        }
+    } else {
+        std::memset(dest, 0, samples * sizeof(int16_t));
     }
     return samples;
 }
 
 int SensecapAudioCodec::Write(const int16_t* data, int samples) {
-    if (output_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+    {
+        std::lock_guard<std::mutex> lock(data_if_mutex_);
+        if (output_enabled_) {
+            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+        }
     }
+    RemoteDisplay::GetInstance()->ForwardPcmAudio(data, samples, output_sample_rate_);
     return samples;
 }

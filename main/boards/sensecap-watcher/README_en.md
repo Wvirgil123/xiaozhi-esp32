@@ -37,9 +37,26 @@ CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT=n
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_LANGUAGE_EN_US=y
 CONFIG_SR_WN_WN9_JARVIS_TTS=y
+CONFIG_SEND_WAKE_WORD_DATA=y
 ```
 
+## Configure remote wake locally
+
+HTTP remote wake is disabled by default on the Watcher. Connect the serial console and run these commands locally. The command echo and terminal logs may contain the token you enter; configure it physically and disable recording:
+
+```text
+remote_wake status
+remote_wake enable <16-128 character safe token>
+remote_wake enable                 # enable with the saved token
+remote_wake disable                # disable but keep the token
+remote_wake clear                  # clear the token and disable
+```
+
+`status` only reports `enabled` and `token_configured`; it never prints the token. Tokens may contain only ASCII letters, digits, `.`, `_`, `~`, and `-`. Enabling requires either an existing valid token or an explicitly supplied new token.
+
 ## Build and Flash
+
+The current repository builds the Watcher with ESP-IDF 5.5.4. With ESP-IDF 6.0.2, the upstream `sscma_client` still declares the legacy component name `json`, so CMake stops during dependency resolution. Do not bypass this compatibility issue by modifying managed components.
 
 ```bash
 idf.py -DBOARD_NAME=sensecap-watcher build flash
